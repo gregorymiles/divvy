@@ -1,0 +1,431 @@
+---
+title: "Divvy Bike-Trip-Data Analysis"
+author: "Gregory Miles"
+date: "2023-05-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1 Introduction
+
+In this report, I will analyse real bike-trip data from 2022 from Chicago's bike-share service, Divvy, to respond to a fictional business task.
+
+### 1.1 Scenario
+
+Divvy's finance department have found that the company makes more money from individuals when they convert to being annual members rather than remaining as pay-per-trip ("casual") riders.
+
+### 1.2 Business Task
+
+Determine the ways in which annual members differ from casual riders such that Divvy's marketing team can better target their new campaign towards those casual riders most likely to convert to annual memberships.
+
+## 2 Cleaning
+
+First, all of the bike-trip data from 2022 was downloaded from Divvy's online data repository: https://divvy-tripdata.s3.amazonaws.com/index.html.
+
+Next, the data were read into the R environment and stored in dataframes month by month.
+
+```{r read-in data month by month, results='hide', error=FALSE, warning=FALSE, message=FALSE}
+# Install readr
+library(readr)
+
+# Read in bike-trip csv data to dataframes month by month
+jan <- read_csv("Data/CSVs/202201-divvy-tripdata.csv")
+feb <- read_csv("Data/CSVs/202202-divvy-tripdata.csv")
+mar <- read_csv("Data/CSVs/202203-divvy-tripdata.csv")
+apr <- read_csv("Data/CSVs/202204-divvy-tripdata.csv")
+may <- read_csv("Data/CSVs/202205-divvy-tripdata.csv")
+jun <- read_csv("Data/CSVs/202206-divvy-tripdata.csv")
+jul <- read_csv("Data/CSVs/202207-divvy-tripdata.csv")
+aug <- read_csv("Data/CSVs/202208-divvy-tripdata.csv")
+sep <- read_csv("Data/CSVs/202209-divvy-tripdata.csv")
+oct <- read_csv("Data/CSVs/202210-divvy-tripdata.csv")
+nov <- read_csv("Data/CSVs/202211-divvy-tripdata.csv")
+dec <- read_csv("Data/CSVs/202212-divvy-tripdata.csv")
+```
+
+Then, the data were combined into a single dataframe.
+
+```{r combine data into single dataframe, results='hide', error=FALSE, warning=FALSE, message=FALSE}
+# Install dplyr
+library(dplyr)
+
+# Bind monthly bike-trip data together by row
+df <- bind_rows(jan, feb, mar, apr, may, jun, jul, aug, sep, oct, nov, dec)
+```
+
+The dataframe was then inspected to better understand the data. The first ten rows are shown below.
+
+```{r display first ten rows of df}
+# Display first ten rows of df
+head(df, n = 10) %>% knitr::kable()
+```
+
+The data consist of 13 variables: `ride_id`, `rideable_type`, `started_at`, `ended_at`, `start_station_name`, `start_station_id`, `end_station_name`, `end_station_id`, `start_lat`, `start_lng`, `end_lat`, `end_lng`, and `member_casual`.
+
+### 2.1 `ride_id`
+
+The `ride_id` column gives a unique ID to each trip. After checking for duplicates&mdash;there were none&mdash;this column was removed.
+
+```{r remove ride_id column}
+# Remove ride_id column
+df <- df %>% select(-ride_id)
+```
+
+### 2.2 `rideable_type`
+
+The `rideable_type` column contains information regarding the type of bike that was used for each trip. Having summarised the column, we found there are three types of bike: `classic_bike`, `docked_bike` and `electric_bike`. The counts of trips using each type of bike are shown in the table below.
+
+```{r summarise rideable_type}
+# Summarise rideable_type column
+df %>% group_by(rideable_type) %>% summarise(Count = n()) %>% knitr::kable()
+```
+
+`docked_bike` trips occurred much less often than trips of the other two types of bicycle. After contacting the company that handles the data, I found out that `docked_bike` is a legacy name for `classic_bike` (i.e. non-electric bike).
+
+All occurrences of `docked_bike` were, therefore, renamed as `classic_bike`.
+
+```{r rename docked_bike as classic_bike}
+# Replace instances of docked_bike with classic_bike
+df$rideable_type <- df$rideable_type %>% gsub('docked_bike', 'classic_bike', .)
+```
+
+### 2.3 `started_at` and `ended_at`
+
+The `started_at` and `ended_at` columns contain the start dates and times and end dates and times of each trip respectively. These dates and times are stored in the date-time format.
+
+Having verified that no trips in the data started before 1st January 2022 and that no trips started after 31st December 2022, a new column was created using the information from these columns: `duration`. This new column was created by subtracting the `started_at` time from the `ended_at` time.
+
+```{r create trip duration column}
+# Calculate and create new trip duration column
+df <- df %>% mutate(duration = as.numeric(ended_at - started_at))
+```
+
+The data contained 100 rows where `ended_at` was before `started_at`, i.e. the `duration` was negative. These rows were removed.
+
+```{r remove rows with negative duration}
+# Remove rows with negative trip duration
+df <- df %>% filter(duration >= 0)
+```
+
+### 2.4 `start_station_name`, `start_station_id`, `end_station_name` and `end_station_id`
+
+These columns were not going to be used in the analysis and so were removed from the dataframe.
+
+```{r remove station name and ID columns}
+# Remove station names and ids columns
+df <- df %>% select(-4:-7)
+```
+
+### 2.5 `start_lat`, `start_lng`, `end_lat` and `end_lng`.
+
+These columns refer to the latitudes and longitudes of the start and end locations of each trip. The data in these columns were used to find the total displacements&mdash;that is the distance between the start and end points&mdash;of each trip.
+
+```{r calculate displacements}
+# Load geosphere package
+library(geosphere)
+
+# Calculate displacements and store in new displacement column
+df$displacement <- distVincentyEllipsoid(df[5:4], df[7:6])
+```
+
+Taking a look at the first fifteen rows of the trips with the largest displacements, we saw that the first nine trips had conspicuously large displacements and very small trip durations. Moreover, the first eight of these nine trips apparently ended at ["Null Island"](https://en.wikipedia.org/wiki/Null_Island).
+
+```{r show fifteen furthest trips}
+# Show fifteen trips with the greatest displacements
+df %>% arrange(desc(displacement)) %>% head(n = 15) %>% knitr::kable()
+```
+
+These trips were, therefore, removed.
+
+```{r remove nine furthest trips}
+# Remove the nine trips with anomalously large displacements
+df <- df %>% arrange(desc(displacement)) %>% .[-1:-9,] %>% arrange(started_at)
+```
+
+Once displacement had been calculated for each trip, `start_lat`, `start_lng`, `end_lat` and `end_lng` were no longer required for the analysis. These columns were then removed.
+
+```{r remove latitude and longitude columns}
+# Remove start and end latitude and longitude columns
+df <- df %>% select(-4:-7)
+```
+
+Once both displacement and duration had been calculated for each trip, it became possible to calculate the average velocity of each trip, namely by dividing the displacement of each trip by its duration. Notice the use of the term velocity and not speed. This is because any trip that ended where it started would have an average velocity of zero even if the trip took place at speed on a circular route. So, why calculate average velocity if it cannot tell us the average speed of a trip?
+
+Well, it can give us an approximation of the average speed for trips that take a more linear route. This allows us to remove any trips from the data that cross a particular displacement more quickly than than said displacement could be cycled in. Such trips might be cases where maintenance have driven bikes between locations, for instance.
+
+```{r calculate average velocity}
+# Calculate and create new average velocity column
+df <- df %>% mutate(average_velocity = displacement / duration)
+```
+
+Plotting a histogram of the average velocities, it was seen that the vast majority of the data was concentrated between zero and ten meters per second. However, some trips were well in excess of these values. Indeed, a very small minority of trips apparently had average velocities of over 1000m/s.
+
+```{r initial histogram of average velocities}
+# Load ggplot2 package
+library(ggplot2)
+
+# Plot histogram of average velocities
+ggplot(data = df) +
+  geom_histogram(mapping = aes(x = average_velocity)) +
+  labs(title = "Average Velocity Histogram", subtitle = "Some trips have anomalously large average velocities", x = "Average Velocity (m/s)", y = "Count")
+```
+
+Presumably, these much faster trips reference trips where either the GPS systems or the clocks on these bikes were malfunctioning.
+
+Even discounting these trips, there were still a few trips well in excess of a fast bicycle's velocity. Assuming, somewhat generously, that no legitimate trips took place faster than 20m/s (i.e. 45mph&mdash;a very fast downhill bicycle speed), and replotting the histogram, a much more realistic distribution of average velocities was obtained.
+
+```{r second histogram of average velocities}
+# Plot histogram of average velocities limiting the x-axis
+ggplot(data = df) +
+  geom_histogram(mapping = aes(x = average_velocity), binwidth = 0.1) +
+  coord_cartesian(xlim = c(0, 20)) +
+  labs(title = "Truncated Average Velocity Histogram", subtitle = "The truncated histogram shows a bimodal distribution with peaks at 0m/s and 3m/s", x = "Average Velocity (m/s)", y = "Count")
+```
+
+The new, truncated histogram showed clear peaks around 0m/s and 3m/s before tailing off sharply. All trips with average velocities greater than 20m/s were, therefore, discarded.
+
+```{r remove trips with average velocities greater than 20m/s}
+# Remove trips with average velocities greater than 20m/s
+df <- df %>% filter(average_velocity <= 20)
+```
+
+The large peak in the number of trips at 0m/s average velocity was not necessarily problematic. It suggested there were a large number of trips that finished where they began, giving them a displacement of 0m and hence an average velocity of 0m/s. By this same reasoning, a similar peak in the number of trips with 0m displacement on the displacement histogram would not be problematic.
+
+What might be problematic, however, would be a peak in the number of trips with zero seconds duration on the duration histogram. Such trips would be instances where a customer had immediately decided against taking a trip after starting it or else had inadvertently stopped the trip perhaps due to confusion around how to unlock the bikes.
+
+```{r duration histogram}
+# Plot trip duration histogram
+ggplot(data = df) +
+  geom_histogram(mapping = aes(x = duration), binwidth = 10) +
+  coord_cartesian(xlim = c(0, 1000)) +
+  labs(title =  "Trip Duration Histogram", subtitle = "There is a bimodal, right-skewed distribution with peaks at 0s and 300s", x = "Duration (s)", y = "Count")
+```
+
+Having plotted the duration histogram, clear peaks at 0 seconds and 5 minutes duration could be seen. To reduce the effect on our analysis of the types of interactions that led to a peak at 0 seconds, every trip that was less than 100m in displacement and less than 100s in duration was removed.
+
+```{r remove trips by mistake}
+# Remove trips with less than 100s duration and 100m displacement
+df <- df %>% filter(duration >= 100 | displacement >= 100)
+```
+
+Replotting the duration histogram, it could be seen that the peak at 0 seconds had been removed. This suggested that trips that were accidental in nature had been removed successfully.
+
+```{r replotted duration histogram}
+# Plot trip duration histogram
+ggplot(data = df) +
+  geom_histogram(mapping = aes(x = duration), binwidth = 10) +
+  coord_cartesian(xlim = c(0, 1000)) +
+  labs(title = "Trip Duration Histogram", subtitle = "The histogram shows a unimodal, right-skewed distribution with a peak at 300s", x = "Duration (s)", y = "Count")
+```
+
+The data was now ready for analysis.
+
+## 3 Analysis
+
+To analyse the differences between annual members and casual riders, the following questions were asked of the data:
+
+* Did both groups ride the same displacement on average?
+* Did both groups ride for the same duration on average?
+* Did both groups ride at the same average velocity on average?
+* Were both groups the same in their behaviours by hour of the day?
+* Were both groups the same in their behaviours by day of the week?
+* Were both groups the same in their behaviours by month of the year?
+* Was the proportion of trips that took place on electric bikes the same for both groups?
+
+### 3.1 Displacement
+
+The average displacements and their associated standard deviations and standard errors for the two groups are summarised in the table below.
+
+```{r displacement summary}
+# Load plotrix to calculate standard errors
+library(plotrix)
+
+# Create table summary
+df %>% group_by(member_casual) %>% summarise("Mean Displacement (m)" = mean(displacement), "Standard Deviation (m)" = sd(displacement), "Standard Error (m)" = std.error(displacement)) %>% knitr::kable()
+```
+
+The casual-rider trips had a mean displacement of 2228m, this was higher than the mean displacement of annual-member trips which was 2144m. Conducting a formal hypothesis test, it was found that this difference was statistically significant at the 5% significance level.
+
+However, just examining the mean displacements did not tell the full story. Looking at the density plots of annual members and casual riders with respect to displacement, we saw two bi-modal distributions. The casual rider distribution had a peak at zero metres and another at approximately 1300 metres. The annual member distribution had a peak at zero metres and another at approximately 1000 metres.
+
+```{r displacement density distributions}
+# Plot displacement density distributions for annual members and casual riders
+ggplot(data = df) +
+  geom_density(mapping = aes(x = displacement, fill = member_casual), alpha = 0.5, bw = 100) +
+  coord_cartesian(xlim = c(0, 10000)) +
+  labs(title = "Displacement Density Distributions", subtitle = "The casual-rider distribution has a more prominent peak at 0m", x = "Displacement (m)", y = "Density", fill = "Rider Type")
+```
+
+Having removed short-duration-short-displacement trips earlier (see section 2.5), the peaks at zero metres referred to trips where the riders finished at the same station they started at. Presumably, such trips were for leisure rather than commuting. 
+
+A much higher proportion of casual riders undertook such trips compared with annual members. We also see a higher density of longer trips taken by casual riders also indicative of leisure-type trips. This suggests that, proportionally, casual riders tend to ride for leisure more whereas annual members tend to ride shorter distances&mdash;their mode was lower than that of casual riders&mdash;more frequently, indicative of commuter-type behaviour.
+
+If this hypothesis that casual riders tend to ride for leisure more whereas annual members tend to ride for commuting more is correct, we would expect to see casual riders riding at slower speeds and for longer durations compared with annual members who we would expect to see riding at faster speeds for shorter durations.
+
+To investigate this hypothesis further, I then turned to look at trip duration.
+
+### 3.2 Duration
+
+The casual riders had a mean trip-duration of 1353s. The annual members had a much smaller mean trip-duration of 762s. Conducting an hypothesis test, it was found that the difference in duration between the two groups was significant at the 5% significance level.
+
+The mean trip-durations and their associated standard deviations and standard errors are summarised in the table below.
+
+```{r duration summary}
+# Display table summarising duration data
+df %>% group_by(member_casual) %>% summarise("Mean Duration (s)" = mean(duration), "Standard Deviation (s)" = sd(duration), "Standard Error (s)" = std.error(duration)) %>% knitr::kable()
+```
+
+Having plotted the density distributions of the two groups, two unimodal, right-skewed distributions were seen. The annual-member distribution had a peak at approximately 300s and the casual-rider distribution had a peak at approximately 400s. Furthermore, the casual-rider distribution had a wider spread than the annual-member distribution. These findings were in line with the hypothesis that casual riders are more likely to ride for leisure (and hence for longer durations) and annual members are more likely to be commuters (and hence ride for shorter, fixed durations with a narrower spread).
+
+The density distributions are shown below.
+
+```{r duration density distributions}
+# Plot trip duration density distributions
+ggplot(data = filter(df, duration <= 5000)) +
+  geom_density(mapping = aes(x = duration, fill = member_casual), alpha = 0.5) +
+  labs(title = "Duration Density Distributions", subtitle = "Casual riders tend to ride for longer than annual members", x = "Duration (s)", y = "Density", fill = "Rider Type")
+```
+
+I then turned to look at the average velocities of the trips.
+
+### 3.3 Average Velocity
+
+The mean average-velocity of trips by casual riders was 2.33m/s. The mean average-velocity of tirps by annual members was larger at 3.21m/s. After conducting an hypothesis test, this difference was found to be significant at the 5% significance level.
+
+The mean average-velocities and their associated standard deviations and standard errors are shown in the table below.
+
+```{r average velocity summary}
+# Display table summarising average velocity data
+df %>% group_by(member_casual) %>% summarise("Mean Average Velocity (m/s)" = mean(average_velocity), "Standard Deviation (m/s)" = sd(average_velocity), "Standard Error (m/s)" = std.error(average_velocity)) %>% knitr::kable()
+```
+
+Looking at the density distributions of the two groups, two bimodal distributions were seen. The casual-rider distribution had peaks at 0m/s and at approximately 2.8m/s. The annual-member distribution had peaks at 0m/s and at approximately 3m/s.
+
+
+```{r average velocity density distributions}
+# Plot average velocity density distributions
+ggplot(data = df) +
+  geom_density(mapping = aes(x = average_velocity, fill = member_casual), alpha = 0.5) +
+  labs(title = "Average Velocity Density Distributions", subtitle = "Casual riders tended to travel at lower average velocities than annual members", x = "Average Velocity (m/s)", y = "Density", fill = "Rider Type")
+```
+
+Presumably, the peaks at 0m/s refer to trips which finished where they started leading to an average velocity of 0m/s because their displacement was 0m. The density plots show that a greater proportion of casual-rider trips than annual-member trips had 0m/s average velocity.
+
+These findings were consistent with the hypothesis that casual riders were more likely than annual members to ride for leisure whereas annual members were more likely to ride for commuting than casual riders.
+
+I then looked at how each group differed in their behaviour according to the hour of the day
+
+### 3.4 Hour of the Day
+
+Having plotted the densities of trips by hour for the two groups, two similar but notably different distributions were observed. Whilst the distributions of both groups had peaks at 5pm, the annual-member distribution had a second peak at 8am whereas the casual-rider distribution did not.
+
+```{r hour density distributions}
+# Load lubridate package
+library(lubridate)
+
+# Plot hour density distributions
+ggplot(data = df) +
+  geom_density(mapping = aes(x = hour(started_at), fill = member_casual), alpha = 0.5, bw = 0.6) +
+  labs(title = "Hour Density Distributions", subtitle = "Annual-member trips peak at peak commuting times", x = "Hour of the Day", y = "Density", fill = "Rider Type")
+```
+
+Again, this is consistent with the hypothesis that annual-members are more likely than casual-riders to use the service for commuting because the annual-member distribution showed peaks at both morning and evening peak commuting times whereas the casual-rider distribution did not.
+
+I then turned to analyse the behaviour of both groups by day of the week.
+
+### 3.5 Day of the Week
+
+Having plotted the proportions of trips of each group that took place on each day, it could be seen that a greater proportion of annual-member trips than casual-rider trips took place on weekdays and, conversely, a greater proportion of casual-rider trips than annual-member trips took place on weekends.
+
+Since most people work on weekdays and have time for leisure activities on weekends, these findings are consistent with the hypothesis that annual members are more likely than casual riders to use the service for commuting and that casual riders are more likely than annual members to use the service for leisure.
+
+```{r day proportion bar plots}
+# Calculate total trip counts by rider type
+total_counts <-
+  df %>%
+  group_by(member_casual) %>%
+  summarise(count = n())
+
+# Calculate annual-member day-of-week proportions
+member_proportions <-
+  df %>%
+  filter(member_casual == "member") %>%
+  group_by(wday(started_at)) %>%
+  summarise(proportion = n()/total_counts[2,2], member_casual = "member")
+
+# Calculate casual-rider day-of-week proportions
+casual_proportions <-
+  df %>% 
+  filter(member_casual == "casual") %>%
+  group_by(wday(started_at)) %>%
+  summarise(proportion = n()/total_counts[1,2], member_casual = "casual")
+
+# Combine annual-member and casual-rider proportions
+proportions <- 
+  bind_rows(member_proportions, casual_proportions) %>%
+  as_tibble()
+
+# Rename columns
+colnames(proportions) <- c("day", "proportion", "member_casual")
+
+# Plot day-of-week proportions as a bar chart
+ggplot(data = proportions) +
+  geom_bar(mapping = aes(x = wday(day, label = TRUE), y = proportion$count, fill = member_casual), stat = 'identity', position = 'dodge') +
+  labs(title = "Day-of-Week Trip Proportions by Rider Type", subtitle = "Annual members are more likely than casual riders to ride on weekdays", x = "Day of the Week", y = "Proportion", fill = "Rider Type")
+
+```
+
+I then turned to consider the behaviours of the two groups by month of the year.
+
+### 3.6 Month of the Year
+
+Having plotted the density distributions of the number of trips of each group by month of the year, it could be seen that whilst both annual members and casual riders use the service more in the summer months than in the winter months, casual riders still rode proportionally more than annual members in the summer.
+
+```{r month density distributions}
+# Plot month density distributions
+ggplot(data = df) +
+  geom_density(mapping = aes(x = month(started_at), fill = member_casual), alpha = 0.5, bw = 0.6) +
+  scale_x_continuous(breaks = seq(1, 12, 1), labels = c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")) +
+  labs(title = "Month Density Distributions", subtitle = "Casual riders were more likely than annual members to ride in summer", x = "Month of the Year", y = "Density", fill = "Rider Type")
+```
+
+### 3.7 Classic vs Electric
+
+A mosaic plot of `rideable_type` against `member_casual` revealed that a greater proportion of casual-rider trips than annual-member trips used electric bikes.
+
+```{r bike type mosaic plot}
+# Load ggmosaic package
+library(ggmosaic)
+
+# Plot mosaic plot of rider type and bike type
+ggplot(data = df) +
+  geom_mosaic(mapping = aes(x = product(rideable_type, member_casual), fill = rideable_type)) +
+  labs(title = "Mosaic Plot of Bike Type by Rider Type", subtitle = "Casual riders are more likely than annual members to use electric bikes", x = "Rider Type", y  = "Bike Type", fill = "Bike Type")
+```
+
+53.8% of casual-rider trips used electric bikes whereas 48.5% of annual-member trips used electric bikes. This means a majority of casual-rider trips used electric bikes whereas a minority of annual-member trips did the same. However, whilst statistically significant, the difference in electric bike usage is slight.
+
+These findings are in no way inconsistent with the hypothesis that annual members are more likely than casual riders to use the service for commuting whereas casual riders are more likely than annual members to use the service for leisure. Indeed, perhaps the novelty of using an electric bike is what draws casual members in.
+
+## 4 Conclusions
+
+From my analysis, I drew the following conclusions:
+
+* A not insignificant number of trips appeared to be mistakes because they had very short durations (of the order of a few seconds).
+* Annual members are more likely than casual riders to use the service for commuting.
+* Casual riders are more likely than annual members to use the service for leisure
+* Annual members and casual riders prefer to ride during the summer months by a large margin. However, casual riders prefer to ride in the summer proportionally more than annual members.
+* Annual members had a slight preference for classic bikes whereas casual riders had a slight preference for electric bikes.
+
+## 5 Recommendations
+
+On the basis of my analysis and conclusions, I make the following recommendation in regards to the business task: Target the new marketing campaign at those casual riders who use the service for commuting and offer the bike-share service as a viable alternative form of commuter transport.
+
+I also make the following additional recommendations:
+
+* Consider ways of simplifying the process of starting a trip to reduce the number of accidental trips.
+* Consider launching a new product aimed at capturing those casual riders who use the service in the summer months for leisure such as a 3-month or summer-only membership.
+* Invest in more electric bikes to draw in more casual riders.
